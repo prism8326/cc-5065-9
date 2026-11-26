@@ -53,10 +53,22 @@
     </div>
 
     <div class="panel">
-      <h2>可编辑遮板</h2>
+      <h2>可编辑遮板 · 门/帘材质</h2>
       <div class="shutter-row">
         <label class="switch"><input type="checkbox" id="chkA" checked><span>遮板 A 打开</span></label>
         <label class="switch"><input type="checkbox" id="chkB"><span>遮板 B 打开（剧本中半程自动开）</span></label>
+      </div>
+      <div class="ctrl">
+        <label>B 路材质（同一窄窗，只换材质）</label>
+        <div class="seg" id="blockerSeg">
+          <button data-blocker="open">全开口</button>
+          <button data-blocker="door" class="active">不透光滑门</button>
+          <button data-blocker="curtain">暗色帘</button>
+        </div>
+      </div>
+      <div class="ctrl" id="curtainTRow">
+        <label for="curtainT">暗色帘透射率 T（像素先变暗，路径族仍计入） <span id="curtainTVal" class="val"></span></label>
+        <input type="range" id="curtainT">
       </div>
       <div class="ctrl">
         <label for="openFraction">中途开口时刻 <span id="openFractionVal" class="val"></span></label>
@@ -156,6 +168,7 @@
         <button class="tab" data-tab="mc">普通采样 / 均匀照明对照</button>
         <button class="tab" data-tab="diag">诊断器 · 支持域 · 模式轨迹</button>
         <button class="tab" data-tab="trace">状态转移 / 提议概率台账</button>
+        <button class="tab" data-tab="pack">素材包 / 光照实验窗口</button>
       </nav>
 
       <div class="tabpane active" id="tab-verify">
@@ -229,7 +242,8 @@
             </div>
             <div id="diagCard"></div>
             <div class="action-row">
-              <button id="actContinue" class="btn">继续累计</button>
+              <button id="actContinue" class="btn">沿用链继续累计</button>
+              <button id="actReseed" class="btn primary">补播新链（保留已有链）</button>
               <button id="actStage" class="btn">分阶段重新归一</button>
               <button id="actRestart" class="btn warn">重启该链</button>
               <button id="actRestartGlobal" class="btn primary">重启并给 B 全局提议</button>
@@ -262,6 +276,64 @@
             </table>
           </div>
           <div id="kernelLog" class="kernel-log"></div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-pack">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>光路压力素材包 · 光照实验窗口 <small>载入真实入库素材，移动狭缝并控制采样，预览通过路径与收敛图像（全部为实时运算）</small></h2>
+          </div>
+          <div class="pack-controls">
+            <label>载入素材包
+              <select id="packSelect"></select>
+            </label>
+            <button id="btnPackLoad" class="btn primary">载入并核验</button>
+            <button id="btnPackUpload" class="btn">导入本地 JSON…</button>
+            <input type="file" id="packFile" accept=".json,application/json" hidden>
+            <span id="packVerifyBadge" class="badge idle">未载入</span>
+          </div>
+          <div id="packMeta" class="pack-meta hint"></div>
+
+          <div class="pack-lab-grid">
+            <div>
+              <h3>实验窗口几何（可拖动狭缝手柄或用滑杆）</h3>
+              <div class="canvas-wrap"><canvas id="packScene" width="520" height="320"></canvas></div>
+              <div class="ctrl">
+                <label>A 狭缝中心 y <span id="packCyAVal" class="val"></span></label>
+                <input type="range" id="packCyA">
+              </div>
+              <div class="ctrl">
+                <label>B 狭缝中心 y <span id="packCyBVal" class="val"></span></label>
+                <input type="range" id="packCyB">
+              </div>
+              <div class="ctrl">
+                <label>狭缝半宽（两条同步） <span id="packHwVal" class="val"></span></label>
+                <input type="range" id="packHw">
+              </div>
+              <div class="pack-controls">
+                <label>链数 <input type="number" id="packChains" min="1" max="12" value="2" style="width:64px"></label>
+                <label>g <input type="number" id="packG" min="0" max="1" step="0.05" value="0.3" style="width:64px"></label>
+                <label>σ <input type="number" id="packSigma" min="0.008" max="0.2" step="0.005" value="0.05" style="width:72px"></label>
+                <label>预算 <input type="number" id="packBudget" min="2000" max="400000" step="2000" value="60000" style="width:90px"></label>
+              </div>
+              <div class="pack-controls">
+                <button id="btnPackRun" class="btn primary">运行采样器</button>
+                <button id="btnPackReseed" class="btn">补播新链</button>
+                <button id="btnPackRef" class="btn">生成分路参考核验</button>
+                <button id="btnPackStudy" class="btn warn">有限预算多种子研究</button>
+              </div>
+              <div id="packError" class="pack-error" hidden></div>
+            </div>
+            <div>
+              <h3>收敛图像（实际估计器输出）</h3>
+              <div class="canvas-wrap"><canvas id="packFilm" width="480" height="324"></canvas></div>
+              <h3>通过路径（当前链 E→P 实时轨迹）</h3>
+              <div id="packStats" class="audit-grid"></div>
+              <div id="packStudyOut" class="pack-study hint"></div>
+              <div id="packVerifyOut" class="pack-verify hint"></div>
+            </div>
+          </div>
         </div>
       </div>
     </div>

@@ -244,3 +244,24 @@ td.warn { color: var(--warn); }
 }
 .kernel-toast.show { opacity: 1; transform: translateY(0); }
 .kernel-toast.policy { background: #241d0e; border-color: var(--warn); color: #ffe9bd; }
+
+/* ---------------- 素材包 / 光照实验窗口 ---------------- */
+.pack-controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin: 10px 0; }
+.pack-controls label { font-size: 12.5px; color: var(--muted); display: inline-flex; align-items: center; gap: 6px; }
+.pack-controls select, .pack-controls input {
+  background: var(--panel2); color: var(--text); border: 1px solid var(--line);
+  border-radius: 7px; padding: 6px 9px; font-size: 13px;
+}
+.pack-meta { line-height: 1.7; margin: 6px 0 12px; }
+.pack-lab-grid { display: grid; grid-template-columns: minmax(300px, 1fr) minmax(320px, 1.1fr); gap: 18px; }
+.pack-lab-grid h3 { font-size: 13.5px; color: var(--text); margin: 12px 0 8px; }
+.pack-lab-grid canvas { background: #070b12; border: 1px solid var(--line); border-radius: 10px; max-width: 100%; }
+.pack-error {
+  background: #2c1214; border: 1px solid #6e2a2e; color: #ffb3b8;
+  border-radius: 8px; padding: 10px 12px; font-size: 13px; margin: 10px 0; white-space: pre-wrap;
+}
+.pack-study, .pack-verify { white-space: pre-wrap; line-height: 1.65; font-family: var(--mono); font-size: 12px; margin-top: 10px; }
+#blockerSeg { width: 100%; }
+#blockerSeg button { flex: 1; }
+#curtainTRow { transition: opacity .15s ease; }
+@media (max-width: 1200px) { .pack-lab-grid { grid-template-columns: 1fr; } }

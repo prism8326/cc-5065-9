@@ -45,6 +45,7 @@
   const SCHEMA = {
     slitHw:   { label: '狭缝半宽', min: 0.012, max: 0.12, step: 0.001, def: 0.045, unit: '世界单位' },
     slitCy:   { label: '狭缝中心 y', min: -0.85, max: 0.85, step: 0.005, def: 0.58 },
+    transmission: { label: '暗色帘透射率 T', min: 0.02, max: 0.6, step: 0.01, def: 0.12 },
     sigma:    { label: '细扰动半径 σ', min: 0.008, max: 0.2, step: 0.002, def: 0.05 },
     globalProb: { label: '全局跳转预算 g', min: 0, max: 1, step: 0.01, def: 0.3 },
     chains:   { label: '独立链数', min: 1, max: 12, step: 1, def: 2 },
@@ -65,14 +66,16 @@
       uniform: false,
       sceneVersion: 1,
       slits: [
-        { id: 'A', name: '通路 A', cy: -0.58, cz: 0, hw: SCHEMA.slitHw.def, hh: 0.52, open: true,  tint: [0.70, 0.85, 1.00] },
-        { id: 'B', name: '通路 B', cy:  0.58, cz: 0, hw: SCHEMA.slitHw.def, hh: 0.52, open: false, tint: [1.00, 0.86, 0.66] }
+        { id: 'A', name: '通路 A', cy: -0.58, cz: 0, hw: SCHEMA.slitHw.def, hh: 0.52, open: true,  blocker: 'open',   T: 0, tint: [0.70, 0.85, 1.00] },
+        { id: 'B', name: '通路 B', cy:  0.58, cz: 0, hw: SCHEMA.slitHw.def, hh: 0.52, open: false, blocker: 'door', T: 0, tint: [1.00, 0.86, 0.66] }
       ]
     };
+    return normalizeScene(scene);
   }
 
   function cloneScene(s) {
-    return Object.assign({}, s, { slits: s.slits.map(x => Object.assign({}, x, { tint: x.tint.slice() })) });
+    const c = Object.assign({}, s, { slits: s.slits.map(x => Object.assign({}, x, { tint: x.tint.slice() })) });
+    return normalizeScene(c);
   }
 
   function boxVolume(scene) {
@@ -102,21 +105,44 @@
     if (!inStateBox(scene, st)) return null;
     const c = crossing(scene, st);
     for (const s of scene.slits) {
-      if (!s.open) continue;
       if (Math.abs(c.yc - s.cy) <= s.hw && Math.abs(c.zc - s.cz) <= s.hh) return s;
     }
     return null;
   }
 
-  const ZERO_EVAL = { star: 0, rgb: [0, 0, 0], slitId: null, geom: 0 };
+  // 通路在几何上是否透光：开口、或挂暗色帘（T>0 的低能量通路）。
+  // 不透光滑门（blocker='door'）使整族路径从目标支持域中消失。blocker 为权威字段。
+  function slitTransmits(s) {
+    if (s.blocker === 'curtain') return (s.T == null ? SCHEMA.transmission.def : s.T) > 0;
+    if (s.blocker === 'door') return false;
+    return true; // blocker === 'open'（含旧数据缺省值经 normalizeScene 校正后）
+  }
+
+  // 载入/构造场景时校正旧字段：保证 open 与 blocker 一致，避免只翻 open 的遗留调用产生矛盾。
+  function normalizeScene(scene) {
+    for (const s of scene.slits) {
+      if (!s.blocker) s.blocker = s.open ? 'open' : 'door';
+      if (s.blocker === 'open') s.open = true;
+      if (s.blocker === 'door') { s.open = false; s.T = 0; }
+      if (s.T == null) s.T = 0;
+    }
+    return scene;
+  }
+
+  const ZERO_EVAL = { star: 0, rgb: [0, 0, 0], slitId: null, geom: 0, blockedBy: null };
 
   // 路径贡献 f(theta)。直接光路 E->P：Le * G(E,P) * V_slit * We。
+  // blocker 三态（同一窄窗几何，只换材质/遮挡）：
+  //   open    -> 全透光；door -> 零贡献（路径族消失）；curtain -> 乘以透射率 T（低能量通路仍在）。
   function evalPath(scene, st) {
     if (!inStateBox(scene, st)) return ZERO_EVAL;
     let slit = null;
     if (!scene.uniform) {
       slit = hitSlit(scene, st);
       if (!slit) return ZERO_EVAL;
+      if (!slitTransmits(slit)) {
+        return { star: 0, rgb: [0, 0, 0], slitId: null, geom: 0, blockedBy: slit.id };
+      }
     }
     const dx = 2 * scene.D;
     const ry = st.py - st.ey;
@@ -125,10 +151,11 @@
     const invR = 1 / Math.sqrt(r2);
     const cos = dx * invR;
     const G = cos * cos / r2;                 // 3D 面积测度几何项
-    const scalar = scene.emitterPower * G;
+    const T = slit && slit.blocker === 'curtain' ? (slit.T == null ? SCHEMA.transmission.def : slit.T) : 1;
+    const scalar = scene.emitterPower * G * T;
     const tint = slit ? slit.tint : [1, 1, 1];
     const r = scalar * tint[0], g = scalar * tint[1], b = scalar * tint[2];
-    return { star: lumRGB(r, g, b), rgb: [r, g, b], slitId: slit ? slit.id : 'U', geom: G };
+    return { star: lumRGB(r, g, b), rgb: [r, g, b], slitId: slit ? slit.id : 'U', geom: G, blockedBy: null };
   }
 
   // ---------------- 像素映射 / 胶片 ----------------
@@ -634,8 +661,10 @@
       const sigma = opts.sigma != null ? opts.sigma : SCHEMA.sigma.def;
       const g = opts.globalProb != null ? opts.globalProb : SCHEMA.globalProb.def;
 
-      // 剧本开始：B 遮板关闭
+      // 剧本开始：B 遮板关闭（不透光滑门，路径族消失）
       this.scene.slits[1].open = false;
+      if (this.scene.slits[1].blocker === 'curtain') this.scene.slits[1].blocker = 'door';
+      this.scene.slits[1].T = 0;
       this.scene.sceneVersion++;
       this.phase = 'pre';
       this.donePre = 0; this.donePost = 0;
@@ -673,6 +702,8 @@
     openSecondPath() {
       if (this.phase !== 'pre') return null;
       this.scene.slits[1].open = true;
+      this.scene.slits[1].blocker = 'open';
+      this.scene.slits[1].T = 0;
       this.scene.sceneVersion++;
       const b2Info = estimateB(this.scene, this.bSamples, new RNG(5678));
       for (const E of [this.A, this.B]) {
@@ -744,6 +775,69 @@
       return bInfo;
     }
 
+    // 诊断器动作：补播新链。沿用已有链（状态/轨迹不动），仅为缺失的透光模式追加条件种子链，
+    // 然后在新 b 下开一个阶段；若所有透光模式都已被覆盖则返回 null，不制造无意义阶段。
+    supplementChains(which, opts) {
+      opts = opts || {};
+      const targets = which === 'A' ? [this.A] : which === 'B' ? [this.B] : [this.A, this.B];
+      const added = [];
+      const bInfo = estimateB(this.scene, this.bSamples, this.rngB);
+      for (const E of targets) {
+        const present = new Set(E.chains.map(c => c.f && c.f.slitId));
+        const missing = this.scene.slits.filter(s => slitTransmits(s) && !present.has(s.id));
+        if (!missing.length) {
+          this.emit('policy', '补播判定：' + E.name[0] + ' 已覆盖全部透光通路，沿用已有链，不补播');
+          continue;
+        }
+        for (const s of missing) {
+          let seeded = false;
+          for (let tries = 0; tries < 2000; tries++) {
+            const smp = sampleConditional(this.scene, s, this.rngB);
+            const f = evalPath(this.scene, smp.st);
+            if (f.star > 0) {
+              E.chains.push({ state: smp.st, f, initTries: tries + 1, supplemented: true });
+              E.numChains = E.chains.length;
+              seeded = true;
+              added.push(E.name[0] + ':' + s.id);
+              E.logEvent('reseed', '补播新链：条件种子到透光通路 ' + s.id + '（尝试 ' + (tries + 1) + ' 次）');
+              break;
+            }
+          }
+          if (!seeded) this.emit('fail', '补播失败：透光通路 ' + s.id + ' 条件采样 2000 次未得正贡献');
+        }
+        E.beginStage({ label: '补播新链阶段 @' + E.totalSteps, bInfo, timeWeight: this._w2 || 1 });
+      }
+      if (added.length) {
+        this.emit('policy', '诊断决策：补播新链（已有链沿用，仅追加缺失模式链）→ ' + added.join(', '));
+      }
+      return added.length ? { added, bInfo } : null;
+    }
+
+    // 材质编排：同一窄窗几何在 不透光滑门 / 暗色帘 之间切换（只改材质，几何不动）。
+    // door：整族路径 f*≡0；curtain：保留 T>0 的低能量通路。
+    setBlocker(slitId, blocker, T) {
+      const s = this.scene.slits.find(x => x.id === slitId);
+      if (!s) throw new Error('未知通路 ' + slitId);
+      if (blocker !== 'open' && blocker !== 'door' && blocker !== 'curtain') {
+        throw new Error('blocker 必须是 open | door | curtain');
+      }
+      s.blocker = blocker;
+      if (blocker === 'curtain') {
+        s.T = T == null ? SCHEMA.transmission.def : T;
+        s.open = false; // open 标志仅服务旧剧本；透光性改由 slitTransmits 判定
+      } else if (blocker === 'door') {
+        s.T = 0;
+        s.open = false;
+      } else {
+        s.open = true;
+      }
+      this.scene.sceneVersion++;
+      for (const E of [this.A, this.B]) for (const ch of E.chains) ch.f = evalPath(this.scene, ch.state);
+      this.emit('geom', '通路 ' + slitId + ' 材质切换为 ' + blocker +
+        (blocker === 'curtain' ? '（T=' + s.T + '，低能量通路保留）' : blocker === 'door' ? '（路径族消失）' : '（全透光）'));
+      return s;
+    }
+
     // 诊断器动作：重启链（支持域够不到新区域时的唯一无偏有限样本补救之一）
     restartChains(which, opts) {
       opts = opts || {};
@@ -763,7 +857,7 @@
     // 模式覆盖初始化：若独立随机种子漏掉某条开放通路，用该通路条件样本补一条链。
     _seedMissingModes(E) {
       const present = new Set(E.chains.map(c => c.f && c.f.slitId));
-      const open = this.scene.slits.filter(s => s.open);
+      const open = this.scene.slits.filter(s => slitTransmits(s));
       let k = 0;
       for (const s of open) {
         if (present.has(s.id)) continue;
@@ -786,6 +880,7 @@
 
   // ---------------- 提议支持域探针 + 诊断器 ----------------
   // 从链当前状态按真实 q 抽探针，估计提议落到各通路的经验概率。
+  // 落到不透光滑门后的几何狭缝也会被单独标记（door:<id>），与“根本没命中任何狭缝”的 zero 区分。
   function probeSupport(exp, nProbe, rng) {
     rng = rng || new RNG(9090);
     nProbe = nProbe || 800;
@@ -798,7 +893,10 @@
       for (let i = 0; i < nProbe; i++) {
         const { y } = propose(exp.scene, x, exp.cfg, rng);
         const f = evalPath(exp.scene, y);
-        const key = f.slitId || (f.star > 0 ? 'U' : 'zero');
+        let key;
+        if (f.slitId) key = f.slitId;
+        else if (f.blockedBy) key = 'door:' + f.blockedBy;
+        else key = f.star > 0 ? 'U' : 'zero';
         reach[key] = (reach[key] || 0) + 1;
         perChain[ci].reach[key] = (perChain[ci].reach[key] || 0) + 1;
         perChain[ci].n++;
@@ -819,11 +917,14 @@
     const out = {};
     for (const k of Object.keys(stg.bInfo.bBySlit || {})) {
       const o = stg.bInfo.bBySlit[k];
-      out[k] = stg.bInfo.b > 0 ? o.b / stg.b : 0;
+      out[k] = stg.b > 0 ? o.b / stg.b : 0;
     }
     return out;
   }
 
+  // 三态诊断：对每条透光通路在
+  //   continue（沿用已有链继续累计）/ reseed（补播新链覆盖缺模式）/ unreachable（目标里根本不存在该族路径）
+  // 之间取舍。不透光滑门通路的正确判决就是 unreachable——它不是采样失败，而是路径族已消失。
   function evaluateDiagnosis(cmp, which, opts) {
     opts = opts || {};
     const exp = which === 'B' ? cmp.B : cmp.A;
@@ -843,56 +944,78 @@
       const reach = probe.reach[s.id] || 0;
       let status = 'ok';
       const reasons = [];
-      if (!s.open) {
+      if (!slitTransmits(s)) {
+        // 滑门关闭：目标支持域中该族路径严格不存在；门后探针命中只证明几何狭缝在，不代表可采样
         status = 'closed';
-        reasons.push('遮板关闭，目标支持域中不存在该区域');
+        const doorReach = probe.reach['door:' + s.id] || 0;
+        reasons.push(s.blocker === 'door'
+          ? '不透光滑门：该族路径已从目标中消失（f*≡0），判决不可达；门后几何探针命中=' + doorReach.toExponential(1)
+          : '遮板关闭，目标支持域中不存在该区域');
       } else if (expFrac > 0.02) {
         if (reach < reachMin && rate === 0 && n > minVisits) {
           status = 'unreachable';
           reasons.push('提议支持域探针命中率≈' + reach.toExponential(1) + '，链从未访问（' + visits + '）；局部有界扰动跨不过零密度间隔');
         } else if (visits < minVisits || (n > 2000 && rate < expFrac * 0.25)) {
           status = 'weak';
-          reasons.push('访问率 ' + rate.toFixed(4) + ' 显著低于归一化预测 ' + expFrac.toFixed(4) + '，证据不足');
+          reasons.push('访问率 ' + rate.toFixed(4) + ' 显著低于归一化预测 ' + expFrac.toFixed(4) + '，证据不足，需要补播新链');
         } else {
-          reasons.push('访问率 ' + rate.toFixed(3) + ' 与预测份额 ' + expFrac.toFixed(3) + ' 相容');
+          reasons.push('访问率 ' + rate.toFixed(3) + ' 与预测份额 ' + expFrac.toFixed(3) + ' 相容，沿用已有链继续累计');
         }
+      } else if (s.blocker === 'curtain') {
+        reasons.push('暗色帘透射 T=' + s.T + '：低能量通路仍计入目标，bBySlit 份额=' + expFrac.toExponential(1));
       }
-      regions.push({ id: s.id, name: s.name, open: s.open, expFrac, rate, visits, reach, status, reasons, roi: slitScreenROI(cmp.scene, s) });
+      regions.push({
+        id: s.id, name: s.name, open: slitTransmits(s), blocker: s.blocker, T: s.T || 0,
+        expFrac, rate, visits, reach, status, reasons, roi: slitScreenROI(cmp.scene, s)
+      });
     }
 
     // 像素级证据不足区域
     const evidence = buildEvidenceMap(exp, opts.countThreshold || 6);
 
-    // 决策：是否存在“目标里开着、但提议够不到且无访问”的区域
-    const unreachable = regions.filter(r => r.status === 'unreachable');
+    // 目标里真实存在（透光）但采样够不到/证据不足的区域，才构成采样器动作；
+    // 滑门造成的 unreachable 属于正确物理状态，不触发重启。
+    const physicalUnreachable = regions.filter(r => r.status === 'unreachable' && r.open);
+    const doorUnreachable = regions.filter(r => r.status === 'unreachable' && !r.open);
     const weak = regions.filter(r => r.status === 'weak');
     const targetDirty = exp.stage && exp.stage.sceneVersion !== cmp.scene.sceneVersion;
 
     let action = 'continue';
+    let policy3 = 'continue';
     let severity = 'ok';
-    let title = '继续累计';
+    let title = '沿用已有链继续累计';
     const reasons = [];
-    if (targetDirty) {
-      action = 'stage-renorm';
-      severity = 'warn';
-      title = '目标已改变：分阶段重新归一';
-      reasons.push('阶段建立于 sceneVersion=' + exp.stage.sceneVersion + '，当前=' + cmp.scene.sceneVersion);
-    } else if (unreachable.length) {
+    if (physicalUnreachable.length) {
+      // 透光但现有链支持域够不到：必须补播新链（或重启）
       action = 'restart';
+      policy3 = 'reseed';
       severity = 'bad';
-      title = '重启链 / 启用全局提议';
-      reasons.push('存在提议支持域不可达的亮路: ' + unreachable.map(r => r.id).join(','));
+      title = '补播新链 / 启用全局提议（现有链支持域不可达）';
+      reasons.push('存在提议支持域不可达的透光通路: ' + physicalUnreachable.map(r => r.id).join(','));
     } else if (weak.length) {
+      // 目标可达但证据不足：可沿用链继续累计，也可补播加速覆盖
       action = 'continue';
+      policy3 = 'reseed';
       severity = 'warn';
-      title = '继续累计：部分区域证据不足';
-      reasons.push('弱证据区域: ' + weak.map(r => r.id).join(','));
+      title = '建议补播新链：部分透光区域证据不足（也可沿用链继续累计）';
+      reasons.push('弱证据区域: ' + weak.map(r => r.id).join(',') + '（也可继续累计等待混合）');
     } else {
-      reasons.push('提议支持域覆盖全部开放通路，访问率与 b 预测相容');
+      reasons.push('提议支持域覆盖全部透光通路，访问率与 b 预测相容，沿用已有链');
+    }
+    if (targetDirty) {
+      // 目标已变：旧阶段权重失效，需先分阶段重新归一；
+      // 三态建议只由覆盖状态决定，目标脏本身不构成补链理由。
+      action = 'stage-renorm';
+      severity = severity === 'ok' ? 'warn' : severity;
+      title = '目标已改变：分阶段重新归一' + (policy3 === 'reseed' ? '（并按需补播新链）' : '（沿用已有链）');
+      reasons.unshift('阶段建立于 sceneVersion=' + exp.stage.sceneVersion + '，当前=' + cmp.scene.sceneVersion);
+    }
+    if (doorUnreachable.length) {
+      reasons.push('滑门通路 ' + doorUnreachable.map(r => r.id).join(',') + ' 判决不可达：f*≡0，不补链、不计能量（与暗色帘的低能量通路对照）');
     }
 
     return {
-      which, action, severity, title, reasons, regions, probe, evidence,
+      which, action, policy3, severity, title, reasons, regions, probe, evidence,
       acceptance: exp.acceptanceRate(),
       acceptanceGlobal: exp.acceptanceRate('global'),
       acceptanceLocal: exp.acceptanceRate('local'),
@@ -908,7 +1031,7 @@
     const status = new Uint8Array(W * H); // 0 无目标/不计, 1 证据不足, 2 充分
     // 用 bInfo 无法给像素级期望，改用“是否落在任一开放 ROI”作为应照亮区域
     const rois = exp.scene.uniform ? [{ lo: -exp.scene.syHalf, hi: exp.scene.syHalf }]
-      : exp.scene.slits.filter(s => s.open).map(slit => slitScreenROI(exp.scene, slit));
+      : exp.scene.slits.filter(slit => slitTransmits(slit)).map(slit => slitScreenROI(exp.scene, slit));
     for (let x = 0; x < W; x++) {
       const py = -exp.scene.syHalf + (x + 0.5) / W * 2 * exp.scene.syHalf;
       let inRoi = false;
@@ -987,10 +1110,10 @@
 
   function conditionalP(scene, st) {
     const c = crossing(scene, st);
-    const open = scene.slits.filter(s => s.open &&
+    const open = scene.slits.filter(s => slitTransmits(s) &&
       Math.abs(c.yc - s.cy) <= s.hw && Math.abs(c.zc - s.cz) <= s.hh);
     if (!open.length) return 0;
-    const k = scene.slits.filter(s => s.open).length;
+    const k = scene.slits.filter(s => slitTransmits(s)).length;
     let p = 0;
     for (const s of open) {
       const Ley = 2 * scene.eyHalf, Lez = 2 * scene.ezHalf;
@@ -1005,7 +1128,7 @@
     const rng = opts.rng || new RNG(opts.seed || 555);
     const mode = opts.mode || 'conditional'; // conditional | uniform
     const img = new McImage(W, H);
-    const openSlits = scene.slits.filter(s => s.open);
+    const openSlits = scene.slits.filter(s => slitTransmits(s));
     const st = {};
     for (let i = 0; i < n; i++) {
       let p, sample;
@@ -1040,7 +1163,7 @@
     start(n) { this.target = n; this.done = 0; this.running = true; return this; }
     chunk(chunkN) {
       const mode = this.opts.mode || 'conditional';
-      const openSlits = this.scene.slits.filter(s => s.open);
+      const openSlits = this.scene.slits.filter(s => slitTransmits(s));
       const st = {};
       const end = Math.min(this.target, this.done + chunkN);
       for (; this.done < end; this.done++) {
@@ -1105,17 +1228,306 @@
     return runReferenceSync(scene, n, { mode: 'uniform', seed: seed || 8080 });
   }
 
+  // ---------------- 微缩双缝场景：能量占比已知的可复现实验 ----------------
+  // 两条几何完全相同的窄缝（同 hw/hh、对称 cy），份额差异只来自 tint/透射率；
+  // 因此解析能量份额 = 该缝的 lum(tint)*T 占比，可在未采样前写入素材包。
+  function miniScene(opts) {
+    opts = opts || {};
+    const sc = defaultScene();
+    sc.sceneVersion = 1;
+    sc.name = opts.name || 'mini-two-slit';
+    const hw = opts.hw != null ? opts.hw : 0.022; // 比默认更窄的孔
+    const cy = opts.cy != null ? opts.cy : 0.58;
+    const hh = 0.52;
+    const TA = opts.TA != null ? opts.TA : 1;
+    const TB = opts.TB != null ? opts.TB : 1;
+    const tintA = opts.tintA || [0.70, 0.85, 1.00];
+    const tintB = opts.tintB || [1.00, 0.86, 0.66];
+    sc.slits = [
+      { id: 'A', name: '微缩通路 A', cy: -cy, cz: 0, hw, hh, open: true, blocker: 'open', tint: tintA.slice(), T: TA },
+      { id: 'B', name: '微缩通路 B', cy:  cy, cz: 0, hw, hh, open: true, blocker: 'open', tint: tintB.slice(), T: TB }
+    ];
+    sc.knownFractions = analyticFractions(sc);
+    return sc;
+  }
+
+  function slitWeight(s) {
+    const T = s.blocker === 'curtain' ? (s.T == null ? SCHEMA.transmission.def : s.T)
+      : slitTransmits(s) ? 1 : 0;
+    return T * lumRGB(s.tint[0], s.tint[1], s.tint[2]);
+  }
+
+  // 几何相同的缝之间，解析亮度份额正比于 lum(tint)*T。
+  function analyticFractions(scene) {
+    const w = {};
+    let sum = 0;
+    for (const s of scene.slits) { w[s.id] = slitWeight(s); sum += w[s.id]; }
+    const out = {};
+    for (const k of Object.keys(w)) out[k] = sum > 0 ? w[k] / sum : 0;
+    return out;
+  }
+
+  // ---------------- 像素级参考积分：分路光斑来源核验 ----------------
+  // 对每条透光缝独立封住其余路径后跑条件参考，统计其屏幕 ROI 内的亮度能量；
+  // 返回每路 ROI 能量、全图能量以及 ROI 占比，用于核验导出像素确实来自该路。
+  function referencePathAttribution(scene, n, opts) {
+    opts = opts || {};
+    const rng0 = opts.seed || 7001;
+    const perPath = {};
+    const transmitting = scene.slits.filter(s => slitTransmits(s));
+    let sumROI = 0;
+    for (let k = 0; k < transmitting.length; k++) {
+      const target = transmitting[k];
+      const sc = cloneScene(scene);
+      for (const s of sc.slits) {
+        const isTarget = s.id === target.id;
+        s.open = isTarget;
+        s.blocker = isTarget ? target.blocker : 'door';
+        if (!isTarget) s.T = 0;
+      }
+      const img = runReferenceSync(sc, n, { mode: 'conditional', seed: rng0 + k * 97, W: opts.W, H: opts.H }).composed();
+      const roi = slitScreenROI(scene, target);
+      const region = imageRegionEnergy(img, scene, roi.lo, roi.hi);
+      const full = imageEnergy(img);
+      perPath[target.id] = {
+        roi: { lo: roi.lo, hi: roi.hi, x0: region.x0, x1: region.x1 },
+        roiLum: region.lum, fullLum: full.lum,
+        roiShareOfImage: full.lum > 0 ? region.lum / full.lum : 0,
+        samples: img.counts ? region.samples : 0,
+        pixelsLit: region.pixels
+      };
+      sumROI += region.lum;
+    }
+    // 双开参考：ROI 内能量应可由分路结果相加恢复
+    const bothImg = runReferenceSync(scene, n, { mode: 'conditional', seed: rng0 + 9991, W: opts.W, H: opts.H }).composed();
+    const both = {};
+    for (const s of transmitting) {
+      const roi = slitScreenROI(scene, s);
+      both[s.id] = imageRegionEnergy(bothImg, scene, roi.lo, roi.hi).lum;
+    }
+    const check = {};
+    for (const s of transmitting) {
+      check[s.id] = both[s.id] > 0 ? perPath[s.id].roiLum / both[s.id] : null;
+    }
+    return { perPath, bothROILum: both, additivityRatio: check, n, analytic: analyticFractions(scene) };
+  }
+
+  // ---------------- 有限预算 · 多种子覆盖研究 ----------------
+  // 固定连续种子序列（不挑幸运种子），在同一预算下重复独立 MLT 运行，
+  // 报告模式覆盖率、份额误差与像素覆盖，暴露有限预算的模式未覆盖问题。
+  function budgetStudy(scene, opts) {
+    opts = opts || {};
+    const seeds = opts.seeds || [11, 22, 33, 44, 55, 66, 77, 88];
+    const budget = opts.budget || 40000;
+    const g = opts.globalProb != null ? opts.globalProb : 0;
+    const bInfo = opts.bInfo || estimateB(scene, opts.bSamples || 200000, new RNG(909));
+    const truth = analyticFractions(scene);
+    const rows = [];
+    for (const seed of seeds) {
+      const exp = new Experiment({
+        scene, seed, globalProb: g, sigma: opts.sigma != null ? opts.sigma : SCHEMA.sigma.def,
+        chains: opts.chains || 1, W: opts.W || FILM_W, H: opts.H || FILM_H
+      });
+      exp.reset({ bInfo });
+      exp.run(budget);
+      const rates = exp.modeRates();
+      let lit = 0;
+      for (let i = 0; i < exp.coverage.length; i++) if (exp.coverage[i] > 0) lit++;
+      const covered = {};
+      const fracErr = {};
+      for (const s of scene.slits) {
+        covered[s.id] = (exp.stage.modeCounts[s.id] || 0) > 0;
+        fracErr[s.id] = covered[s.id] ? Math.abs((rates[s.id] || 0) - (truth[s.id] || 0)) : null;
+      }
+      rows.push({
+        seed, budget, globalProb: g, acceptance: exp.acceptanceRate(),
+        rates, covered, fracErr,
+        pixelsCovered: lit,
+        pixelCoverFraction: lit / (exp.W * exp.H)
+      });
+    }
+    const summary = {};
+    for (const s of scene.slits) {
+      const miss = rows.filter(r => !r.covered[s.id]).length;
+      const errs = rows.filter(r => r.fracErr[s.id] != null).map(r => r.fracErr[s.id]);
+      summary[s.id] = {
+        timesCovered: rows.length - miss,
+        runs: rows.length,
+        missRate: miss / rows.length,
+        truthFraction: truth[s.id] || 0,
+        medianFracErr: errs.length ? errs.slice().sort((a, b) => a - b)[Math.floor(errs.length / 2)] : null
+      };
+    }
+    return { seeds, budget, globalProb: g, rows, summary, truth, b: bInfo.b, note: '连续固定种子，未做任何幸运种子筛选' };
+  }
+
+  // ---------------- 光路压力素材包：构建 / 校验 / 载入 ----------------
+  // 素材包是自描述 JSON：场景来源与参数、解析份额、独立 MC 的 b 与分路统计、
+  // 分路像素光斑归属，以及内容指纹。重建脚本与界面都通过 verifyStressPack 核验，禁止伪报。
+  function fnv1aHash(str) {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return ('0000000' + h.toString(16)).slice(-8);
+  }
+
+  function canonicalScene(scene) {
+    return JSON.stringify({
+      D: scene.D, eyHalf: scene.eyHalf, ezHalf: scene.ezHalf,
+      syHalf: scene.syHalf, szHalf: scene.szHalf, emitterPower: scene.emitterPower,
+      uniform: !!scene.uniform,
+      slits: scene.slits.map(s => ({
+        id: s.id, cy: s.cy, cz: s.cz || 0, hw: s.hw, hh: s.hh,
+        open: !!s.open, blocker: s.blocker || 'open', T: s.T || 0, tint: s.tint.slice()
+      }))
+    });
+  }
+
+  function buildStressPack(scene, opts) {
+    opts = opts || {};
+    const bSamples = opts.bSamples || 600000;
+    const refN = opts.refN || 600000;
+    const seedBase = opts.seedBase || 20250;
+    const bInfo = estimateB(scene, bSamples, new RNG(seedBase));
+    const attribution = referencePathAttribution(scene, refN, { seed: seedBase + 300, W: opts.W, H: opts.H });
+    const pack = {
+      format: 'ml-path-lab/stress-pack',
+      formatVersion: 1,
+      kind: opts.kind || 'two-slit-mini',
+      name: opts.name || scene.name || 'stress-pack',
+      createdAt: new Date().toISOString(),
+      source: {
+        description: opts.sourceDescription || 'src/kernel.js miniScene/defaultScene 生成，参数见 scene 段',
+        kernel: 'src/kernel.js',
+        generator: 'MLK.buildStressPack',
+        sceneFingerprint: fnv1aHash(canonicalScene(scene))
+      },
+      params: { bSamples, refN, seedBase, film: { W: opts.W || FILM_W, H: opts.H || FILM_H } },
+      scene: JSON.parse(canonicalScene(scene)),
+      analyticFractions: analyticFractions(scene),
+      normalization: {
+        b: bInfo.b, se: bInfo.se, n: bInfo.n, volume: bInfo.volume,
+        proposal: bInfo.proposal, densityFormula: bInfo.densityFormula,
+        bBySlit: bInfo.bBySlit
+      },
+      attribution
+    };
+    pack.fingerprint = packFingerprint(pack);
+    return pack;
+  }
+
+  // 指纹只覆盖物理/统计内容，不含指纹自身与时间戳，保证重建可复算。
+  function packFingerprint(pack) {
+    const body = JSON.stringify({
+      fp: pack.source.sceneFingerprint,
+      params: pack.params,
+      scene: pack.scene,
+      analytic: pack.analyticFractions,
+      b: pack.normalization.b,
+      attribution: pack.attribution
+    });
+    return fnv1aHash(body);
+  }
+
+  // 严格载入：结构、指纹、场景一致性全部检查；任何不符都抛错，由界面 toast 提示。
+  function loadStressPack(json) {
+    const pack = typeof json === 'string' ? JSON.parse(json) : json;
+    const errs = [];
+    if (!pack || pack.format !== 'ml-path-lab/stress-pack') errs.push('format 不是 ml-path-lab/stress-pack');
+    if (!pack.scene || !Array.isArray(pack.scene.slits) || !pack.scene.slits.length) errs.push('scene.slits 缺失');
+    if (!pack.normalization || !(pack.normalization.b > 0)) errs.push('normalization.b 非正');
+    if (!pack.attribution || !pack.attribution.perPath) errs.push('attribution.perPath 缺失');
+    if (errs.length) throw new Error('素材包结构无效: ' + errs.join('; '));
+    if (pack.fingerprint !== packFingerprint(pack)) {
+      throw new Error('素材包指纹不一致：内容被篡改或来自不兼容版本');
+    }
+    const rebuilt = fnv1aHash(canonicalScene(pack.scene));
+    if (rebuilt !== pack.source.sceneFingerprint) {
+      throw new Error('场景指纹不一致：scene 段已被修改（重算=' + rebuilt + ' 存档=' + pack.source.sceneFingerprint + '）');
+    }
+    // 内容指纹覆盖 source.sceneFingerprint，几何篡改必然同时改变两者的一致性，无法靠重算指纹绕过
+    return pack;
+  }
+
+  // 独立重建核验：用当前采样器重新估计 b、重跑分路参考，与包内约定值比较。
+  // tolerance 为相对容差；任一项越界即返回 ok:false 并列出原因，绝不静默通过。
+  function verifyStressPack(pack, opts) {
+    opts = opts || {};
+    let loaded;
+    try { loaded = loadStressPack(pack); } catch (e) { return { ok: false, checks: [], failure: e.message }; }
+    const checks = [];
+    const add = (name, pass, detail) => checks.push({ name, pass: !!pass, detail });
+    add('结构与指纹', true, 'fingerprint=' + loaded.fingerprint);
+
+    const bInfo = estimateB(loaded.scene, opts.bSamples || loaded.params.bSamples,
+      new RNG((opts.seedBase || loaded.params.seedBase) + 777));
+    const bRel = Math.abs(bInfo.b - loaded.normalization.b) / loaded.normalization.b;
+    add('重建 b 与约定 b 相对误差', bRel <= (opts.bTol || 0.06),
+      'rebuild=' + bInfo.b.toExponential(5) + ' packed=' + loaded.normalization.b.toExponential(5) + ' rel=' + bRel.toFixed(4));
+
+    const attr = referencePathAttribution(loaded.scene, opts.refN || loaded.params.refN,
+      { seed: (opts.seedBase || loaded.params.seedBase) + 4242, W: loaded.params.film.W, H: loaded.params.film.H });
+    let attrOk = true;
+    const attrDetail = [];
+    for (const id of Object.keys(loaded.attribution.perPath)) {
+      const packedV = loaded.attribution.perPath[id].roiLum;
+      const rebuiltV = attr.perPath[id].roiLum;
+      const rel = packedV > 0 ? Math.abs(rebuiltV - packedV) / packedV : 1;
+      if (rel > (opts.attrTol || 0.08)) { attrOk = false; }
+      attrDetail.push(id + ':' + rel.toFixed(4));
+    }
+    add('分路 ROI 光斑重建', attrOk, attrDetail.join(' '));
+
+    // 可加性：封住单路的 ROI 能量之和应恢复双开参考 ROI（包内自证 + 重建复算）
+    let addOk = true; const addDetail = [];
+    for (const id of Object.keys(attr.additivityRatio)) {
+      const r = attr.additivityRatio[id];
+      if (r == null || Math.abs(r - 1) > (opts.addTol || 0.08)) addOk = false;
+      addDetail.push(id + '=' + (r == null ? 'null' : r.toFixed(3)));
+    }
+    add('分路能量可加性（单封 vs 双开）', addOk, addDetail.join(' '));
+
+    // 解析份额与 bBySlit 经验份额一致
+    let fracOk = true; const fracDetail = [];
+    for (const id of Object.keys(loaded.analyticFractions)) {
+      const empirical = loaded.normalization.bBySlit[id]
+        ? loaded.normalization.bBySlit[id].b / loaded.normalization.b : 0;
+      const rel = Math.abs(empirical - loaded.analyticFractions[id]);
+      if (rel > (opts.fracTol || 0.03)) fracOk = false;
+      fracDetail.push(id + ': analytic=' + loaded.analyticFractions[id].toFixed(3) + ' mc=' + empirical.toFixed(3));
+    }
+    add('解析能量占比 vs 独立 MC 份额', fracOk, fracDetail.join(' '));
+
+    // 不透光缝不得出现在 bBySlit 正贡献里
+    let doorOk = true; const doorDetail = [];
+    for (const s of loaded.scene.slits) {
+      if (!slitTransmits(s)) {
+        const v = loaded.normalization.bBySlit[s.id];
+        if (v && v.b > 0) { doorOk = false; doorDetail.push(s.id + ' 应为零却 b=' + v.b); }
+      }
+    }
+    add('滑门通路零能量', doorOk, doorDetail.join(' ') || '所有非透光缝 b=0');
+
+    const ok = checks.every(c => c.pass);
+    return { ok, checks, rebuilt: { b: bInfo.b, attribution: attr } };
+  }
+
   return {
     D_X, FILM_W, FILM_H, LUM_W, lumRGB,
     RNG, SCHEMA,
     defaultScene, cloneScene, boxVolume, inStateBox, uniformState,
-    crossing, hitSlit, evalPath,
+    crossing, hitSlit, evalPath, slitTransmits, slitWeight, normalizeScene,
     pixelOf, Film, imageEnergy, imageRegionEnergy, slitScreenROI,
     localPdf, proposalQ, propose, localMoveFromDraws,
     estimateB,
     Experiment, pairedSyncStep, Comparison,
     probeSupport, evaluateDiagnosis, buildEvidenceMap, expectedModeFractions,
     McImage, runReferenceSync, ReferenceRunner,
-    sampleConditional, conditionalP, uniformMc, compareImages
+    sampleConditional, conditionalP, uniformMc, compareImages,
+    miniScene, analyticFractions, referencePathAttribution, budgetStudy,
+    buildStressPack, loadStressPack, verifyStressPack, packFingerprint,
+    fnv1aHash, canonicalScene
   };
 });

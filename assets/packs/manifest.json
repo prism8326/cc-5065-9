@@ -1,0 +1,30 @@
+{
+  "format": "ml-path-lab/stress-pack-index",
+  "formatVersion": 1,
+  "description": "光路压力素材包清单：马尔可夫光路（src/kernel.js）可直接 loadStressPack 载入；任何包都可经 verifyStressPack 独立重建核验。",
+  "entry": "src/kernel.js#MLK.loadStressPack / MLK.verifyStressPack",
+  "builder": "tools/build-pack.js",
+  "packs": [
+    {
+      "id": "mini-symmetric",
+      "file": "mini-symmetric.json",
+      "kind": "two-slit-mini",
+      "summary": "等几何窄双缝，冷/暖 tint，解析份额约 48.6/51.4",
+      "fingerprint": "ab289cdb"
+    },
+    {
+      "id": "mini-weighted",
+      "file": "mini-weighted.json",
+      "kind": "two-slit-mini",
+      "summary": "等几何加权双缝，解析能量占比严格 80/20",
+      "fingerprint": "7fc76c78"
+    },
+    {
+      "id": "door-curtain",
+      "file": "door-curtain.json",
+      "kind": "two-slit-mini",
+      "summary": "A 全开口 + B 暗色帘 T=0.12 的低能量通路压力场景，解析份额约 90.5/9.5",
+      "fingerprint": "376aef62"
+    }
+  ]
+}

@@ -1,0 +1,131 @@
+{
+  "format": "ml-path-lab/stress-pack",
+  "formatVersion": 1,
+  "kind": "mini-weighted",
+  "name": "mini-weighted",
+  "createdAt": "2026-11-26T16:58:59.587Z",
+  "source": {
+    "description": "tools/build-pack.js build mini-weighted → src/kernel.js MLK.buildStressPack",
+    "kernel": "src/kernel.js",
+    "generator": "MLK.buildStressPack",
+    "sceneFingerprint": "17c088e6"
+  },
+  "params": {
+    "bSamples": 400000,
+    "refN": 400000,
+    "seedBase": 20250,
+    "film": {
+      "W": 160,
+      "H": 108
+    }
+  },
+  "scene": {
+    "D": 1.6,
+    "eyHalf": 0.18,
+    "ezHalf": 0.55,
+    "syHalf": 1.4,
+    "szHalf": 0.95,
+    "emitterPower": 7,
+    "uniform": false,
+    "slits": [
+      {
+        "id": "A",
+        "cy": -0.58,
+        "cz": 0,
+        "hw": 0.02,
+        "hh": 0.52,
+        "open": true,
+        "blocker": "open",
+        "T": 1,
+        "tint": [
+          1,
+          1,
+          1
+        ]
+      },
+      {
+        "id": "B",
+        "cy": 0.58,
+        "cz": 0,
+        "hw": 0.02,
+        "hh": 0.52,
+        "open": true,
+        "blocker": "open",
+        "T": 1,
+        "tint": [
+          0.25,
+          0.25,
+          0.25
+        ]
+      }
+    ]
+  },
+  "analyticFractions": {
+    "A": 0.8,
+    "B": 0.2
+  },
+  "normalization": {
+    "b": 0.03340523514258544,
+    "se": 0.00026892976893994834,
+    "n": 400000,
+    "volume": 2.1067199999999997,
+    "proposal": "p_ind = 1/V 的全状态盒均匀独立采样",
+    "densityFormula": "p(theta)=1/V, V=(2eyH)(2ezH)(2pyH)(2pzH)=2.10672",
+    "bBySlit": {
+      "A": {
+        "b": 0.026656491476075777,
+        "hits": 10176,
+        "hitFraction": 0.02544
+      },
+      "B": {
+        "b": 0.006748743666509814,
+        "hits": 10295,
+        "hitFraction": 0.0257375
+      }
+    }
+  },
+  "attribution": {
+    "perPath": {
+      "A": {
+        "roi": {
+          "lo": -1.38,
+          "hi": -0.94,
+          "x0": 1,
+          "x1": 27
+        },
+        "roiLum": 0.026933628510734088,
+        "fullLum": 0.026933628510734088,
+        "roiShareOfImage": 1,
+        "samples": 328427,
+        "pixelsLit": 2916
+      },
+      "B": {
+        "roi": {
+          "lo": 0.94,
+          "hi": 1.38,
+          "x0": 133,
+          "x1": 159
+        },
+        "roiLum": 0.006728330801427161,
+        "fullLum": 0.006728330801427161,
+        "roiShareOfImage": 1,
+        "samples": 328214,
+        "pixelsLit": 2916
+      }
+    },
+    "bothROILum": {
+      "A": 0.027000925429678996,
+      "B": 0.006715983177242233
+    },
+    "additivityRatio": {
+      "A": 0.9975076069477627,
+      "B": 1.0018385430485843
+    },
+    "n": 400000,
+    "analytic": {
+      "A": 0.8,
+      "B": 0.2
+    }
+  },
+  "fingerprint": "7fc76c78"
+}

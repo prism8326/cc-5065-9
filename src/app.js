@@ -61,6 +61,9 @@
     $('slitCyB').value = dflt.slits[1].cy;
     $('exposure').min = K.SCHEMA.exposure.min; $('exposure').max = K.SCHEMA.exposure.max; $('exposure').step = K.SCHEMA.exposure.step;
     $('exposure').value = app.gain;
+    const t = $('curtainT');
+    t.min = K.SCHEMA.transmission.min; t.max = K.SCHEMA.transmission.max;
+    t.step = K.SCHEMA.transmission.step; t.value = K.SCHEMA.transmission.def;
   }
   function syncControlLabels() {
     const sc = app.cmp.scene;
@@ -77,6 +80,10 @@
     $('openFractionVal').textContent = (+$('openFraction').value).toFixed(2);
     $('exposureVal').textContent = '×' + Math.round(app.gain).toLocaleString();
     $('cmpG').textContent = (+$('globalProb').value).toFixed(2);
+    const bSlit = app.cmp.scene.slits[1];
+    $('curtainTVal').textContent = (bSlit.T != null ? bSlit.T : K.SCHEMA.transmission.def).toFixed(2);
+    $$('#blockerSeg button').forEach(btn => btn.classList.toggle('active', btn.dataset.blocker === (bSlit.blocker || 'open')));
+    $('curtainTRow').style.opacity = bSlit.blocker === 'curtain' ? '1' : '.45';
   }
 
   function readScriptOptions() {
@@ -96,8 +103,10 @@
     const hw = +$('slitHw').value;
     sc.slits[0].hw = hw; sc.slits[1].hw = hw;
     sc.uniform = $('chkUniform').checked;
+    // A 路沿用开关；B 路材质由 blocker 段权威决定
     sc.slits[0].open = $('chkA').checked;
-    sc.slits[1].open = $('chkB').checked;
+    sc.slits[0].blocker = $('chkA').checked ? 'open' : 'door';
+    K.normalizeScene(sc);
     for (const E of [app.cmp.A, app.cmp.B]) E.cfg.shape = $('selShape').value;
   }
   function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
@@ -115,8 +124,8 @@
       app.autoRestarted = {};
       app.running = true;
       $('btnPlay').textContent = '‖ 暂停';
-      $('chkA').checked = app.cmp.scene.slits[0].open;
-      $('chkB').checked = app.cmp.scene.slits[1].open;
+      $('chkA').checked = K.slitTransmits(app.cmp.scene.slits[0]);
+      $('chkB').checked = K.slitTransmits(app.cmp.scene.slits[1]);
       app.refs.stale = true;
       syncControlLabels();
       renderAll();
@@ -391,12 +400,20 @@
         cursor = hi;
       }
       ctx.beginPath(); ctx.moveTo(wallX, Y(cursor)); ctx.lineTo(wallX, Y(1.55)); ctx.stroke();
-      // 孔与遮板
+      // 孔与遮板：open 全透 / door 不透光滑门（整族路径消失）/ curtain 暗色帘（低能量通路）
       for (const s of sc.slits) {
         const y0 = Y(s.cy + s.hw), y1 = Y(s.cy - s.hw);
-        if (s.open) {
+        if (K.slitTransmits(s) && s.blocker !== 'curtain') {
           ctx.fillStyle = s.id === 'A' ? 'rgba(127,180,255,.85)' : 'rgba(255,217,168,.85)';
           ctx.fillRect(wallX - 5, y0, 10, Math.max(2, y1 - y0));
+        } else if (s.blocker === 'curtain') {
+          // 暗色帘：半透明紫幕，仍有 T>0 的光透过
+          ctx.fillStyle = 'rgba(170,120,220,.55)';
+          ctx.fillRect(wallX - 6, y0, 12, Math.max(4, y1 - y0));
+          ctx.strokeStyle = 'rgba(200,170,255,.85)'; ctx.lineWidth = 1;
+          ctx.setLineDash([3, 3]);
+          ctx.strokeRect(wallX - 6, y0, 12, Math.max(4, y1 - y0));
+          ctx.setLineDash([]);
         } else {
           ctx.fillStyle = '#a34747';
           ctx.fillRect(wallX - 6, y0 - 1, 12, Math.max(4, y1 - y0 + 2));
@@ -453,7 +470,7 @@
       ctx.moveTo(wallX, hy - 6); ctx.lineTo(wallX + 6, hy); ctx.lineTo(wallX, hy + 6); ctx.lineTo(wallX - 6, hy);
       ctx.closePath(); ctx.stroke();
       ctx.fillStyle = '#ffb454'; ctx.font = 'bold 12px sans-serif'; ctx.textAlign = 'left';
-      ctx.fillText(s.id + (s.open ? '' : '(关)'), wallX + 12, hy + 4);
+      ctx.fillText(s.id + (K.slitTransmits(s) ? (s.blocker === 'curtain' ? '(帘)' : '') : '(门关)'), wallX + 12, hy + 4);
     }
     ctx.textAlign = 'center';
     ctx.fillStyle = '#7d8aa3'; ctx.fillText('x = 0 遮板', wallX, sceneView.H - 14);
@@ -525,13 +542,14 @@
       ctx.moveTo(X(pts[0][0]), Y(pts[0][1]));
       for (let i = 1; i < 4; i++) ctx.lineTo(X(pts[i][0]), Y(pts[i][1]));
       ctx.closePath();
-      ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${s.open ? .30 : .07})`;
+      const transmits = K.slitTransmits(s);
+      ctx.fillStyle = `rgba(${col[0]},${col[1]},${col[2]},${transmits ? .30 : .07})`;
       ctx.fill();
-      ctx.setLineDash(s.open ? [] : [5, 4]);
+      ctx.setLineDash(transmits ? [] : [5, 4]);
       ctx.strokeStyle = `rgba(${col[0]},${col[1]},${col[2]},.8)`; ctx.lineWidth = 1.5; ctx.stroke();
       ctx.setLineDash([]);
       ctx.fillStyle = `rgb(${col[0]},${col[1]},${col[2]})`; ctx.textAlign = 'left';
-      ctx.fillText(s.id + (s.open ? '' : ' 关闭'), X(sc.eyHalf) + 6, Y(2 * s.cy) + 4);
+      ctx.fillText(s.id + (transmits ? (s.blocker === 'curtain' ? ' 暗色帘' : '') : ' 滑门关闭'), X(sc.eyHalf) + 6, Y(2 * s.cy) + 4);
     }
 
     const E = app.cmp[app.ui.diagRun];
@@ -604,8 +622,8 @@
   function renderStats() {
     const cmp = app.cmp;
     // 剧本半程自动开 B 后，把场景状态回写到遮板控件（程序化赋值不触发 change）
-    if (document.activeElement !== $('chkA')) $('chkA').checked = !!cmp.scene.slits[0].open;
-    if (document.activeElement !== $('chkB')) $('chkB').checked = !!cmp.scene.slits[1].open;
+    if (document.activeElement !== $('chkA')) $('chkA').checked = K.slitTransmits(cmp.scene.slits[0]);
+    if (document.activeElement !== $('chkB')) $('chkB').checked = K.slitTransmits(cmp.scene.slits[1]);
     renderKernelToast();
     renderStageSeg();
     const pr = cmp.progress();
@@ -801,13 +819,15 @@
     $('diagCard').className = d.severity;
     $('diagCard').innerHTML =
       `<div class="dtitle">${d.title}</div>` +
-      `<div>建议动作：<b>${{ continue: '继续累计', 'stage-renorm': '分阶段重新归一', restart: '重启链' }[d.action]}</b>` +
+      `<div>三态建议：<b>${{ continue: '沿用已有链继续累计', reseed: '补播新链', unreachable: '宣告不可达' }[d.policy3] || d.policy3}</b>` +
+      ` · 内核动作：<b>${{ continue: '继续累计', 'stage-renorm': '分阶段重新归一', restart: '重启链' }[d.action]}</b>` +
       ` · 接受率 ${pct(d.acceptance, 1)}（全局 ${pct(d.acceptanceGlobal, 1)} / 局部 ${pct(d.acceptanceLocal, 1)}） · n=${d.n}</div>` +
       `<ul>${d.reasons.map(r => `<li>${r}</li>`).join('')}</ul>`;
     $('regionTable').querySelector('tbody').innerHTML = d.regions.map(r => {
-      const statusText = { ok: '证据相容', weak: '证据不足', unreachable: '不可达', closed: '遮板关闭' }[r.status];
+      const statusText = { ok: '证据相容', weak: '证据不足(建议补播)', unreachable: '透光但不可达', closed: '滑门关闭·不可达' }[r.status];
       const cls = r.status === 'unreachable' ? 'bad' : r.status === 'weak' ? 'warn' : r.status === 'ok' ? 'good' : '';
-      return `<tr><td style="color:${MODE_COLORS[r.id]}">${r.name}</td>` +
+      const mat = r.blocker === 'door' ? '滑门' : r.blocker === 'curtain' ? '暗色帘 T=' + r.T : '开口';
+      return `<tr><td style="color:${MODE_COLORS[r.id]}">${r.name}<br><small>${mat}</small></td>` +
         `<td class="${cls}">${statusText}</td>` +
         `<td>${pct(r.expFrac, 2)}</td><td>${pct(r.rate, 2)}</td>` +
         `<td class="${r.reach < 0.002 && r.open ? 'bad' : ''}">${(r.reach * 100).toFixed(2)}%</td>` +
@@ -832,7 +852,9 @@
       base.uniform = false;
       const mkScene = (aOpen, bOpen) => {
         const s = K.cloneScene(base);
-        s.slits[0].open = aOpen; s.slits[1].open = bOpen;
+        s.slits[0].blocker = aOpen ? 'open' : 'door'; s.slits[0].open = aOpen; if (!aOpen) s.slits[0].T = 0;
+        s.slits[1].blocker = bOpen ? 'open' : 'door'; s.slits[1].open = bOpen; if (!bOpen) s.slits[1].T = 0;
+        K.normalizeScene(s);
         s.sceneVersion++;
         return s;
       };
@@ -1053,16 +1075,47 @@
 
     $('chkA').addEventListener('change', e => {
       app.cmp.scene.slits[0].open = e.target.checked;
+      app.cmp.scene.slits[0].blocker = e.target.checked ? 'open' : 'door';
+      K.normalizeScene(app.cmp.scene);
       markTargetChanged(e.target.checked ? '遮板 A 打开' : '遮板 A 关闭（遮挡长曝光对应配置）');
     });
-    $('chkB').addEventListener('change', e => {
-      if (e.target.checked && app.cmp.phase === 'pre') {
-        app.cmp.openSecondPath();
-        app.refs.stale = true;
-      } else {
-        app.cmp.scene.slits[1].open = e.target.checked;
-        markTargetChanged(e.target.checked ? '遮板 B 手动打开' : '遮板 B 关闭');
+    // B 路材质三态：全开口 / 不透光滑门（整族路径消失）/ 暗色帘（只改材质的低能量通路）
+    $$('#blockerSeg button').forEach(btn => btn.addEventListener('click', () => {
+      const blocker = btn.dataset.blocker;
+      const T = +$('curtainT').value;
+      app.cmp.setBlocker('B', blocker, T);
+      $('chkB').checked = K.slitTransmits(app.cmp.scene.slits[1]);
+      app.refs.stale = true;
+      app.geometryDirty = true;
+      scheduleRefs(false);
+      syncControlLabels();
+    }));
+    $('curtainT').addEventListener('input', () => {
+      const s = app.cmp.scene.slits[1];
+      if (s.blocker === 'curtain') {
+        s.T = +$('curtainT').value;
+        app.cmp.scene.sceneVersion++;
+        for (const E of [app.cmp.A, app.cmp.B]) for (const ch of E.chains) ch.f = K.evalPath(app.cmp.scene, ch.state);
+        app.geometryDirty = true; app.refs.stale = true;
       }
+      syncControlLabels();
+    });
+    $('curtainT').addEventListener('change', () => {
+      if (app.cmp.scene.slits[1].blocker === 'curtain') {
+        markTargetChanged('暗色帘透射率 T 改变，低能量通路权重变化，需要重新归一');
+        scheduleRefs(false);
+      }
+    });
+    $('chkB').addEventListener('change', e => {
+      const want = e.target.checked;
+      // 复选框只表达“透光与否”：勾选→全开口；取消→滑门（帘请用材质段）
+      app.cmp.setBlocker('B', want ? 'open' : 'door', want ? 0 : 0);
+      if (want && app.cmp.phase === 'pre') {
+        app.cmp.openSecondPath();
+      }
+      app.refs.stale = true; app.geometryDirty = true;
+      scheduleRefs(false);
+      syncControlLabels();
     });
     $('btnOpenB').addEventListener('click', () => {
       $('chkB').checked = true;
@@ -1070,9 +1123,10 @@
         app.cmp.openSecondPath();
         for (const E of [app.cmp.A, app.cmp.B]) for (const ch of E.chains) ch.f = K.evalPath(app.cmp.scene, ch.state);
         app.refs.stale = true;
-      } else if (!app.cmp.scene.slits[1].open) {
-        $('chkB').checked = true;
-        app.cmp.scene.slits[1].open = true;
+        syncControlLabels();
+      } else if (!K.slitTransmits(app.cmp.scene.slits[1])) {
+        app.cmp.setBlocker('B', 'open');
+        app.geometryDirty = true;
         markTargetChanged('中途打开第二条亮路 B（剧本外时刻）');
       }
     });
@@ -1137,6 +1191,16 @@
       app.cmp.renormalizeStaged(); app.geometryDirty = false;
       app.ui.stage = 'last'; renderStageSeg(true);
     });
+    $('actReseed').addEventListener('click', () => {
+      try {
+        const res = app.cmp.supplementChains(app.ui.diagRun);
+        if (!res) app.cmp.emit('policy', '补播判定：所有透光模式已被现有链覆盖，无需补播');
+        app.geometryDirty = false;
+        focusRunLatestStage(app.ui.diagRun);
+      } catch (err) {
+        app.cmp.emit('fail', '补播新链失败: ' + err.message);
+      }
+    });
     $('actRestart').addEventListener('click', () => {
       app.cmp.restartChains(app.ui.diagRun, { enableGlobal: false }); app.geometryDirty = false;
       focusRunLatestStage(app.ui.diagRun);
@@ -1170,6 +1234,295 @@
     });
   }
 
+  // ---------------- 素材包 / 光照实验窗口（独立实验，不扰动主剧本） ----------------
+  const packLab = {
+    manifest: null, pack: null, scene: null, exp: null, bInfo: null,
+    drag: null, error: null
+  };
+  window.__PACK_LAB__ = packLab;
+
+  function packError(msg) {
+    packLab.error = msg;
+    const box = $('packError');
+    box.hidden = !msg;
+    box.textContent = msg ? '马尔可夫光路界面异常：' + msg : '';
+    if (msg) app.cmp.emit('fail', '光照实验窗口: ' + msg);
+  }
+
+  async function loadPackManifest() {
+    try {
+      const res = await fetch('assets/packs/manifest.json');
+      if (!res.ok) throw new Error('manifest HTTP ' + res.status);
+      packLab.manifest = await res.json();
+      const sel = $('packSelect');
+      sel.innerHTML = packLab.manifest.packs.map(p =>
+        `<option value="${p.file}">${p.id} — ${p.summary}</option>`).join('');
+    } catch (e) {
+      packError('素材包清单载入失败（' + e.message + '）；仍可用“导入本地 JSON”载入');
+    }
+  }
+
+  function syncPackSliders() {
+    const sc = packLab.scene;
+    if (!sc) return;
+    $('packCyA').value = sc.slits[0].cy; $('packCyB').value = sc.slits[1].cy;
+    $('packHw').value = sc.slits[0].hw;
+    $('packCyAVal').textContent = sc.slits[0].cy.toFixed(3);
+    $('packCyBVal').textContent = sc.slits[1].cy.toFixed(3);
+    $('packHwVal').textContent = sc.slits[0].hw.toFixed(3);
+  }
+
+  function ingestPack(pack) {
+    const loaded = K.loadStressPack(pack);
+    const verify = K.verifyStressPack(loaded, { bSamples: 200000, refN: 200000 });
+    if (!verify.ok) {
+      packError('素材包重建核验未通过: ' + verify.checks.filter(c => !c.pass).map(c => c.name).join(', '));
+      $('packVerifyBadge').className = 'badge post';
+      $('packVerifyBadge').textContent = '核验失败';
+      return;
+    }
+    packLab.pack = loaded;
+    packLab.scene = K.normalizeScene(JSON.parse(JSON.stringify(loaded.scene)));
+    packLab.exp = null; packLab.bInfo = null; packLab.error = null;
+    $('packError').hidden = true;
+    $('packVerifyBadge').className = 'badge pre';
+    $('packVerifyBadge').textContent = '核验通过 · ' + loaded.fingerprint;
+    const frac = loaded.analyticFractions;
+    $('packMeta').innerHTML =
+      `来源 <b>${loaded.source.kernel}</b> · ${loaded.source.description}<br>` +
+      `参数 bSamples=${loaded.params.bSamples} refN=${loaded.params.refN} seedBase=${loaded.params.seedBase}` +
+      ` · 约定 b=${loaded.normalization.b.toExponential(4)}（SE=${loaded.normalization.se.toExponential(2)}）<br>` +
+      `解析能量占比 A=${(frac.A * 100).toFixed(1)}% / B=${(frac.B * 100).toFixed(1)}%` +
+      ` · 材质: ` + loaded.scene.slits.map(s => s.id + '=' + (s.blocker || 'open') + (s.blocker === 'curtain' ? '(T=' + s.T + ')' : '')).join(', ');
+    $('packCyA').min = K.SCHEMA.slitCy.min; $('packCyA').max = K.SCHEMA.slitCy.max; $('packCyA').step = K.SCHEMA.slitCy.step;
+    $('packCyB').min = K.SCHEMA.slitCy.min; $('packCyB').max = K.SCHEMA.slitCy.max; $('packCyB').step = K.SCHEMA.slitCy.step;
+    $('packHw').min = K.SCHEMA.slitHw.min; $('packHw').max = K.SCHEMA.slitHw.max; $('packHw').step = K.SCHEMA.slitHw.step;
+    syncPackSliders();
+    drawPackScene();
+    $('packStats').innerHTML = ''; $('packStudyOut').textContent = ''; $('packVerifyOut').textContent = '';
+    const cv = $('packFilm').getContext('2d');
+    cv.fillStyle = '#05070b'; cv.fillRect(0, 0, $('packFilm').width, $('packFilm').height);
+  }
+
+  async function loadSelectedPack() {
+    try {
+      const file = $('packSelect').value;
+      const res = await fetch('assets/packs/' + file);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      ingestPack(await res.json());
+    } catch (e) { packError(e.message); }
+  }
+
+  const packView = { W: 520, H: 320, xmin: -2.05, xmax: 2.05, ymin: -1.62, ymax: 1.62 };
+  function packMap() {
+    const M = { l: 46, r: 34, t: 24, b: 30 };
+    const pw = packView.W - M.l - M.r, ph = packView.H - M.t - M.b;
+    const X = (x) => M.l + (x - packView.xmin) / (packView.xmax - packView.xmin) * pw;
+    const Y = (y) => M.t + (packView.ymax - y) / (packView.ymax - packView.ymin) * ph;
+    return { X, Y };
+  }
+  function drawPackScene() {
+    const sc = packLab.scene;
+    const canvas = $('packScene');
+    if (!sc || !canvas) return;
+    const ctx = canvas.getContext('2d');
+    const { X, Y } = packMap();
+    ctx.fillStyle = '#0a101c'; ctx.fillRect(0, 0, packView.W, packView.H);
+    ctx.strokeStyle = '#ffe9c4'; ctx.lineWidth = 6;
+    ctx.beginPath(); ctx.moveTo(X(-sc.D), Y(-sc.eyHalf)); ctx.lineTo(X(-sc.D), Y(sc.eyHalf)); ctx.stroke();
+    ctx.strokeStyle = '#8fa3c4'; ctx.lineWidth = 5;
+    ctx.beginPath(); ctx.moveTo(X(sc.D), Y(-sc.syHalf)); ctx.lineTo(X(sc.D), Y(sc.syHalf)); ctx.stroke();
+    const wallX = X(0);
+    ctx.strokeStyle = '#55637c'; ctx.lineWidth = 8;
+    const intervals = sc.slits.map(s => [s.cy - s.hw, s.cy + s.hw]).sort((a, b) => a[0] - b[0]);
+    let cursor = -1.55;
+    for (const [lo, hi] of intervals) {
+      ctx.beginPath(); ctx.moveTo(wallX, Y(cursor)); ctx.lineTo(wallX, Y(lo)); ctx.stroke();
+      cursor = hi;
+    }
+    ctx.beginPath(); ctx.moveTo(wallX, Y(cursor)); ctx.lineTo(wallX, Y(1.55)); ctx.stroke();
+    for (const s of sc.slits) {
+      const y0 = Y(s.cy + s.hw), y1 = Y(s.cy - s.hw);
+      if (K.slitTransmits(s) && s.blocker !== 'curtain') {
+        ctx.fillStyle = s.id === 'A' ? 'rgba(127,180,255,.9)' : 'rgba(255,217,168,.9)';
+      } else if (s.blocker === 'curtain') {
+        ctx.fillStyle = 'rgba(170,120,220,.6)';
+      } else {
+        ctx.fillStyle = '#a34747';
+      }
+      ctx.fillRect(wallX - 6, y0, 12, Math.max(4, y1 - y0));
+      ctx.fillStyle = '#cfd8ea'; ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+      ctx.fillText(s.id + (s.blocker === 'curtain' ? ' 帘T=' + s.T : s.blocker === 'door' ? ' 门' : ''), wallX + 10, Y(s.cy) + 4);
+      ctx.beginPath(); ctx.arc(wallX, Y(s.cy), 9, 0, 7);
+      ctx.lineWidth = 2; ctx.strokeStyle = packLab.drag === s.id ? '#fff' : '#ffb454'; ctx.stroke();
+    }
+    if (packLab.exp) {
+      for (const ch of packLab.exp.chains) {
+        const f = K.evalPath(sc, ch.state);
+        if (f.star <= 0) continue;
+        const col = MODE_COLORS[f.slitId] || '#9fe8c0';
+        ctx.strokeStyle = col; ctx.globalAlpha = 0.9; ctx.lineWidth = 1.6;
+        ctx.beginPath();
+        ctx.moveTo(X(-sc.D), Y(ch.state.ey));
+        ctx.lineTo(X(sc.D), Y(ch.state.py));
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    }
+    ctx.textAlign = 'center'; ctx.fillStyle = '#7d8aa3';
+    ctx.fillText('面光源', X(-sc.D), packView.H - 8);
+    ctx.fillText('屏幕', X(sc.D), packView.H - 8);
+    ctx.fillText('x=0 遮板（可拖手柄移动狭缝）', wallX, packView.H - 8);
+  }
+
+  function runPackSampler() {
+    try {
+      const sc = packLab.scene;
+      if (!sc) throw new Error('请先载入素材包');
+      const chains = clamp(parseInt($('packChains').value, 10) || 2, 1, 12);
+      const g = clamp(+$('packG').value, 0, 1);
+      const sigma = clamp(+$('packSigma').value, K.SCHEMA.sigma.min, K.SCHEMA.sigma.max);
+      const budget = clamp(parseInt($('packBudget').value, 10) || 60000, 2000, 400000);
+      packLab.bInfo = K.estimateB(sc, 200000, new K.RNG(2026));
+      packLab.exp = new K.Experiment({ scene: sc, seed: 31337 + budget % 997, globalProb: g, sigma, chains });
+      packLab.exp.reset({ bInfo: packLab.bInfo });
+      packLab.exp.run(budget);
+      const img = packLab.exp.compose({ counts: true });
+      paintFilm($('packFilm'), img, { view: app.ui.view });
+      const e = K.imageEnergy(img);
+      const rates = packLab.exp.modeRates();
+      let lit = 0;
+      for (let i = 0; i < packLab.exp.coverage.length; i++) if (packLab.exp.coverage[i] > 0) lit++;
+      $('packStats').innerHTML =
+        card('预算 n', budget.toLocaleString(), '') +
+        card('接受率', pct(packLab.exp.acceptanceRate(), 1), '') +
+        card('全图能量 ΣI', fmt(e.lum, 4), '') +
+        card('约定 b', packLab.bInfo.b.toExponential(3), '') +
+        card('能量/b 偏差', pct(e.lum / packLab.bInfo.b - 1, 2), Math.abs(e.lum / packLab.bInfo.b - 1) < 0.05 ? 'ok' : 'warn') +
+        card('A 访问率', pct(rates.A, 1), '') +
+        card('B 访问率', pct(rates.B, 1), K.slitTransmits(sc.slits[1]) ? '' : 'warn') +
+        card('像素覆盖', lit + '/' + (packLab.exp.W * packLab.exp.H), '');
+      drawPackScene();
+    } catch (err) { packError(err.message); }
+  }
+
+  function reseedPackChains() {
+    try {
+      if (!packLab.exp) throw new Error('请先运行采样器');
+      const present = new Set(packLab.exp.chains.map(c => c.f && c.f.slitId));
+      const missing = packLab.scene.slits.filter(s => K.slitTransmits(s) && !present.has(s.id));
+      if (!missing.length) { $('packStudyOut').textContent = '所有透光通路已被现有链覆盖，无需补播。'; return; }
+      const rng = new K.RNG(4242);
+      for (const s of missing) {
+        for (let tries = 0; tries < 2000; tries++) {
+          const smp = K.sampleConditional(packLab.scene, s, rng);
+          const f = K.evalPath(packLab.scene, smp.st);
+          if (f.star > 0) { packLab.exp.chains.push({ state: smp.st, f, supplemented: true }); break; }
+        }
+      }
+      const bInfo = K.estimateB(packLab.scene, 200000, new K.RNG(2027));
+      packLab.exp.beginStage({ label: '补播阶段', bInfo, timeWeight: 1 });
+      packLab.exp.run(30000);
+      const img = packLab.exp.compose({ counts: true });
+      paintFilm($('packFilm'), img, { view: app.ui.view });
+      $('packStudyOut').textContent = '已补播缺失模式链: ' + missing.map(s => s.id).join(',') +
+        '；补播后 rates=' + JSON.stringify(packLab.exp.modeRates());
+      drawPackScene();
+    } catch (err) { packError(err.message); }
+  }
+
+  async function runPackReference() {
+    try {
+      const sc = packLab.scene;
+      if (!sc) throw new Error('请先载入素材包');
+      $('packVerifyOut').textContent = '正在独立重算分路参考（实际运算）…';
+      await new Promise(r => setTimeout(r, 30));
+      const attr = K.referencePathAttribution(sc, 300000, { seed: 90909 });
+      const lines = ['分路光斑来源（独立封住另一路，条件重要性采样，n=300000/路）:'];
+      for (const id of Object.keys(attr.perPath)) {
+        const p = attr.perPath[id];
+        lines.push(`通路 ${id}: ROI[${p.roi.lo.toFixed(2)},${p.roi.hi.toFixed(2)}] 亮度=${p.roiLum.toExponential(4)} 占该路全图=${(p.roiShareOfImage * 100).toFixed(1)}%`);
+      }
+      lines.push('可加比（单封 ROI / 双开 ROI）: ' + Object.entries(attr.additivityRatio)
+        .map(([k, v]) => k + '=' + (v == null ? 'null' : v.toFixed(3))).join(', '));
+      lines.push('解析份额: ' + JSON.stringify(attr.analytic));
+      $('packVerifyOut').textContent = lines.join('\n');
+    } catch (err) { packError(err.message); }
+  }
+
+  function runPackStudy() {
+    try {
+      const sc = packLab.scene;
+      if (!sc) throw new Error('请先载入素材包');
+      $('packStudyOut').textContent = '正在跑连续固定种子的有限预算研究（不筛选幸运种子）…';
+      setTimeout(() => {
+        try {
+          const study = K.budgetStudy(sc, {
+            seeds: [101, 202, 303, 404, 505, 606], budget: 30000,
+            globalProb: clamp(+$('packG').value, 0, 1), chains: 1, bSamples: 120000
+          });
+          const lines = ['有限预算多种子研究（预算=' + study.budget + '，g=' + study.globalProb + '，连续种子未筛选）:'];
+          for (const id of Object.keys(study.summary)) {
+            const s = study.summary[id];
+            lines.push(`通路 ${id}: 覆盖 ${s.timesCovered}/${s.runs}（miss=${(s.missRate * 100).toFixed(0)}%） 真实份额=${s.truthFraction.toFixed(3)} 中位份额误差=${s.medianFracErr == null ? 'N/A' : s.medianFracErr.toFixed(3)}`);
+          }
+          $('packStudyOut').textContent = lines.join('\n');
+        } catch (err) { packError(err.message); }
+      }, 30);
+    } catch (err) { packError(err.message); }
+  }
+
+  function setupPackLab() {
+    loadPackManifest();
+    $('btnPackLoad').addEventListener('click', loadSelectedPack);
+    $('btnPackUpload').addEventListener('click', () => $('packFile').click());
+    $('packFile').addEventListener('change', e => {
+      const f = e.target.files[0];
+      if (!f) return;
+      const rd = new FileReader();
+      rd.onload = () => { try { ingestPack(JSON.parse(rd.result)); } catch (err) { packError(err.message); } };
+      rd.onerror = () => packError('文件读取失败');
+      rd.readAsText(f);
+    });
+    const markDirty = () => {
+      if (!packLab.scene) return;
+      const sc = packLab.scene;
+      sc.slits[0].cy = clamp(+$('packCyA').value, K.SCHEMA.slitCy.min, K.SCHEMA.slitCy.max);
+      sc.slits[1].cy = clamp(+$('packCyB').value, K.SCHEMA.slitCy.min, K.SCHEMA.slitCy.max);
+      const hw = +$('packHw').value;
+      sc.slits[0].hw = hw; sc.slits[1].hw = hw;
+      syncPackSliders(); drawPackScene();
+    };
+    ['packCyA', 'packCyB', 'packHw'].forEach(id => $(id).addEventListener('input', markDirty));
+    const canvas = $('packScene');
+    canvas.addEventListener('pointerdown', ev => {
+      if (!packLab.scene) return;
+      const rect = canvas.getBoundingClientRect();
+      const py = (ev.clientY - rect.top) / rect.height * packView.H;
+      const { Y } = packMap();
+      for (const s of packLab.scene.slits) {
+        if (Math.abs(py - Y(s.cy)) < 16) { packLab.drag = s.id; canvas.setPointerCapture(ev.pointerId); break; }
+      }
+    });
+    canvas.addEventListener('pointermove', ev => {
+      if (!packLab.drag) return;
+      const rect = canvas.getBoundingClientRect();
+      const py = (ev.clientY - rect.top) / rect.height * packView.H;
+      const { Y } = packMap();
+      const wy = packView.ymax - (py - 24) / (packView.H - 54) * (packView.ymax - packView.ymin);
+      const s = packLab.scene.slits.find(x => x.id === packLab.drag);
+      s.cy = clamp(wy, K.SCHEMA.slitCy.min, K.SCHEMA.slitCy.max);
+      syncPackSliders(); drawPackScene();
+    });
+    const endDrag = () => { packLab.drag = null; };
+    canvas.addEventListener('pointerup', endDrag);
+    canvas.addEventListener('pointercancel', endDrag);
+    $('btnPackRun').addEventListener('click', runPackSampler);
+    $('btnPackReseed').addEventListener('click', reseedPackChains);
+    $('btnPackRef').addEventListener('click', runPackReference);
+    $('btnPackStudy').addEventListener('click', runPackStudy);
+  }
+
   function renderAll() { syncControlLabels(); renderStats(); renderDiagPanel(); }
 
   // ---------------- 启动 ----------------
@@ -1177,6 +1530,7 @@
     initSliders();
     app.cmp = new K.Comparison({});
     bindEvents();
+    setupPackLab();
     doReset();
     requestAnimationFrame(frame);
     setTimeout(() => generateRefs(true), 300);

@@ -12,6 +12,8 @@ console.log('== 1. 归一化 b：均匀独立 MC vs 狭缝条件长曝光 vs 普
 {
   const scene = K.defaultScene();
   scene.slits[1].open = true;
+  scene.slits[1].blocker = 'open';
+  K.normalizeScene(scene);
   const t0 = Date.now();
   const bInfo = K.estimateB(scene, 600000, new K.RNG(1));
   console.log('   estimateB 600k 用时', Date.now() - t0, 'ms; b=', bInfo.b.toFixed(5), 'se=', bInfo.se.toFixed(5),
@@ -29,9 +31,9 @@ console.log('== 1. 归一化 b：均匀独立 MC vs 狭缝条件长曝光 vs 普
   console.log('   uniform MC energy lum=', eU.lum.toFixed(5));
   ok('普通均匀MC总能量 ≈ b (5%误差)', approx(eU.lum, bInfo.b, 0.05), eU.lum + ' vs ' + bInfo.b);
 
-  // 单缝遮挡能量可加性
-  const sA = K.cloneScene(scene); sA.slits[0].open = false; // 遮 A -> 仅 B
-  const sB = K.cloneScene(scene); sB.slits[1].open = false; // 遮 B -> 仅 A
+  // 单缝遮挡能量可加性（用不透光滑门封住一路，另一路保持透光）
+  const sA = K.cloneScene(scene); sA.slits[0].open = false; sA.slits[0].blocker = 'door'; sA.slits[0].T = 0; // 遮 A -> 仅 B
+  const sB = K.cloneScene(scene); sB.slits[1].open = false; sB.slits[1].blocker = 'door'; sB.slits[1].T = 0; // 遮 B -> 仅 A
   const rBonly = K.imageEnergy(K.runReferenceSync(sA, 500000, { seed: 4 }).composed()).lum;
   const rAonly = K.imageEnergy(K.runReferenceSync(sB, 500000, { seed: 5 }).composed()).lum;
   console.log('   A-only=', rAonly.toFixed(4), ' B-only=', rBonly.toFixed(4), ' sum=', (rAonly + rBonly).toFixed(4));
@@ -42,6 +44,8 @@ console.log('== 2. MH 账目恒等式：每状态沉积 b*f/f*，胶片亮度/n 
 {
   const scene = K.defaultScene();
   scene.slits[1].open = true;
+  scene.slits[1].blocker = 'open';
+  K.normalizeScene(scene);
   const exp = new K.Experiment({ scene, seed: 7, globalProb: 0.3, chains: 1 });
   exp.reset({ bSamples: 120000 });
   exp.run(200000);
@@ -62,6 +66,8 @@ console.log('== 3. 纯局部有界扰动：跨不过零密度间隔，B 访问�
 {
   const scene = K.defaultScene();
   scene.slits[1].open = true;
+  scene.slits[1].blocker = 'open';
+  K.normalizeScene(scene);
   const exp = new K.Experiment({ scene, seed: 8, globalProb: 0, sigma: 0.05, chains: 1 });
   exp.reset({ bSamples: 80000 });
   // 强制初始状态在 A 模式中心
@@ -108,7 +114,10 @@ console.log('== 4. Comparison 剧本：CRN 前半段像素逐位相同；开口�
   console.log('   diag A:', dA.action, dA.severity, dA.title);
   console.log('   diag B:', dB.action, dB.severity, dB.title, JSON.stringify(dB.regions.find(r => r.id === 'B')?.status));
   ok('A 诊断不为 restart', dA.action !== 'restart' || dA.regions.every(r => r.status !== 'unreachable'));
-  ok('B 诊断要求 restart 且 B 区 unreachable', dB.action === 'restart' && dB.regions.find(r => r.id === 'B').status === 'unreachable');
+  const bRegion = dB.regions.find(r => r.id === 'B');
+  ok('开口后 B 透光但 g=0 链不可达：判决 restart/unreachable',
+    dB.action === 'restart' && bRegion.status === 'unreachable' && bRegion.open === true);
+  ok('三态诊断 policy3=reseed（补播新链）', dB.policy3 === 'reseed');
 
   // B 执行重启（带全局）后应能到 B
   cmp.restartChains('B', { enableGlobal: false });
