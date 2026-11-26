@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>马尔可夫光路实验室 · 狭窄通道 MLT 原型</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <span class="logo">μ</span>
+    <div>
+      <div class="title">马尔可夫光路实验室 <span class="tag">Path-space Markov Light Transport</span></div>
+      <div class="subtitle">狭窄狭缝通道 · 显式扰动 / MH 接受 · 真实 b 归一化估计器 · 拒绝状态全额沉积</div>
+    </div>
+  </div>
+  <div class="transport">
+    <button id="btnReset" class="btn">↺ 重置剧本</button>
+    <button id="btnPlay" class="btn primary">‖ 暂停</button>
+    <button id="btnStep" class="btn">单步突变</button>
+    <label class="slowmo"><input type="checkbox" id="chkSlow"> 慢速观察转移</label>
+    <span id="phaseBadge" class="badge idle">未开始</span>
+  </div>
+</header>
+
+<main class="layout">
+  <!-- ============ 左栏：场景与控件 ============ -->
+  <section class="col left">
+    <div class="panel">
+      <h2>狭缝场景俯视图 <small>可直接拖动光点手柄移动狭缝</small></h2>
+      <div class="canvas-wrap scene-wrap">
+        <canvas id="sceneCanvas" width="760" height="470"></canvas>
+      </div>
+      <div class="legend">
+        <span><i class="dot" style="background:#7fb4ff"></i>通路 A</span>
+        <span><i class="dot" style="background:#ffd9a8"></i>通路 B</span>
+        <span><i class="line-sample"></i>当前链光路 E→P</span>
+        <span><i class="handle-dot"></i>可拖狭缝中心</span>
+      </div>
+      <div class="ctrl">
+        <label for="slitCyA">A 狭缝中心 y <span id="slitCyAVal" class="val"></span></label>
+        <input type="range" id="slitCyA" value="-0.58">
+      </div>
+      <div class="ctrl">
+        <label for="slitCyB">B 狭缝中心 y <span id="slitCyBVal" class="val"></span></label>
+        <input type="range" id="slitCyB" value="0.58">
+      </div>
+      <div class="ctrl">
+        <label for="slitHw">狭缝半宽（两条同步） <span id="slitHwVal" class="val"></span></label>
+        <input type="range" id="slitHw">
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>可编辑遮板</h2>
+      <div class="shutter-row">
+        <label class="switch"><input type="checkbox" id="chkA" checked><span>遮板 A 打开</span></label>
+        <label class="switch"><input type="checkbox" id="chkB"><span>遮板 B 打开（剧本中半程自动开）</span></label>
+      </div>
+      <div class="ctrl">
+        <label for="openFraction">中途开口时刻 <span id="openFractionVal" class="val"></span></label>
+        <input type="range" id="openFraction">
+      </div>
+      <button id="btnOpenB" class="btn warn wide">立即打开第二条亮路 B</button>
+      <label class="switch" style="margin-top:8px"><input type="checkbox" id="chkUniform"><span>均匀照明模式（移除狭缝遮挡，对照用）</span></label>
+    </div>
+
+    <div class="panel">
+      <h2>采样预算与提议</h2>
+      <div class="ctrl">
+        <label for="globalProb">全局跳转预算 g（A 运行） <span id="globalProbVal" class="val"></span></label>
+        <input type="range" id="globalProb">
+        <div class="hint">每次突变以概率 g 从全状态盒独立提议 p_ind=1/V，其余做细扰动；B 对照运行 g=0。</div>
+      </div>
+      <div class="ctrl">
+        <label for="sigma">细扰动半径 σ <span id="sigmaVal" class="val"></span></label>
+        <input type="range" id="sigma">
+      </div>
+      <div class="ctrl">
+        <label for="chains">独立链数 <span id="chainsVal" class="val"></span></label>
+        <input type="range" id="chains">
+      </div>
+      <div class="ctrl">
+        <label for="stepsPerFrame">每帧突变数 <span id="stepsPerFrameVal" class="val"></span></label>
+        <input type="range" id="stepsPerFrame">
+      </div>
+      <div class="ctrl inline">
+        <label>扰动核</label>
+        <select id="selShape">
+          <option value="cube" selected>有界均匀立方体（支撑域精确）</option>
+          <option value="gaussian">高斯（密度可追踪）</option>
+        </select>
+      </div>
+      <button id="btnReinit" class="btn wide">独立初始化全部链（大步探索兜底）</button>
+    </div>
+
+    <div class="panel">
+      <h2>诊断器策略</h2>
+      <select id="selPolicy" class="wide">
+        <option value="manual" selected>建议模式：诊断器给决策，手动执行</option>
+        <option value="auto-stage">自动：目标变化时分阶段重新归一（不自动重启 B，保留受困证据）</option>
+        <option value="auto-restart">自动：支持域不可达且超过宽限期则重启链</option>
+      </select>
+      <div class="hint" id="policyHint">诊断依据：提议支持域探针命中率、各模式访问率、b 预测份额、像素证据计数。</div>
+    </div>
+  </section>
+
+  <!-- ============ 中栏：结果区 ============ -->
+  <section class="col center">
+    <div class="panel film-panel">
+      <div class="panel-head">
+        <h2>收敛图像 <small>真实估计器输出，未做任何均值匹配/自动归一化</small></h2>
+        <div class="film-controls">
+          <div class="seg" id="runSeg">
+            <button data-run="A" class="active">运行 A</button>
+            <button data-run="B">运行 B</button>
+          </div>
+          <div class="seg" id="stageSeg" title="按内核中的阶段动态生成；诊断动作新增的阶段也会出现在这里"></div>
+          <div class="seg" id="viewSeg">
+            <button data-view="color" class="active">彩色</button>
+            <button data-view="false">伪彩</button>
+          </div>
+          <label class="chk"><input type="checkbox" id="chkEvidence">证据不足叠加</label>
+          <label class="chk expo">曝光 <input type="range" id="exposure" min="0.2" max="8" step="0.1"></label>
+          <span id="exposureVal" class="val"></span>
+        </div>
+      </div>
+      <div class="film-stage">
+        <canvas id="filmMain" width="640" height="432"></canvas>
+        <div id="filmHover" class="hover-readout"></div>
+      </div>
+      <div id="filmStats" class="film-stats"></div>
+    </div>
+
+    <div class="panel compare-panel">
+      <h2>两次运行对照 <small>开口前公共随机数(CRN)逐突变同步 → 像素均值完全相同；开口后仅 A 的混合提议含全支持全局跳转</small></h2>
+      <div class="compare-grid">
+        <figure>
+          <figcaption><b style="color:#7fb4ff">A</b> 全局跳转 g=<span id="cmpG">0.30</span> + 细扰动</figcaption>
+          <canvas id="filmA" width="480" height="324"></canvas>
+          <div id="statsA" class="mini-stats"></div>
+        </figure>
+        <figure>
+          <figcaption><b style="color:#ff9d9d">B</b> 仅细扰动（g=0，有界支撑域）</figcaption>
+          <canvas id="filmB" width="480" height="324"></canvas>
+          <div id="statsB" class="mini-stats"></div>
+        </figure>
+      </div>
+      <div id="preMeanLine" class="premean"></div>
+    </div>
+
+    <div class="tabs">
+      <nav class="tabbar">
+        <button class="tab active" data-tab="verify">亮度占比核对（分遮板长曝光）</button>
+        <button class="tab" data-tab="mc">普通采样 / 均匀照明对照</button>
+        <button class="tab" data-tab="diag">诊断器 · 支持域 · 模式轨迹</button>
+        <button class="tab" data-tab="trace">状态转移 / 提议概率台账</button>
+      </nav>
+
+      <div class="tabpane active" id="tab-verify">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>单独遮住每条通路的长曝光</h2>
+            <div>
+              <button id="btnGenRefs" class="btn primary">生成分遮板长曝光核对</button>
+              <span id="refProgress" class="ref-progress"></span>
+            </div>
+          </div>
+          <div class="ref-grid">
+            <figure><canvas id="refBoth" width="400" height="270"></canvas><figcaption>双开长曝光（条件重要性采样，可追踪 p）</figcaption></figure>
+            <figure><canvas id="refBlockB" width="400" height="270"></canvas><figcaption>遮住 B → 仅 A 通路</figcaption></figure>
+            <figure><canvas id="refBlockA" width="400" height="270"></canvas><figcaption>遮住 A → 仅 B 通路</figcaption></figure>
+            <figure><canvas id="refUmC" width="400" height="270"></canvas><figcaption id="umcCaption">普通均匀 MC（窄缝，同预算噪声参照）</figcaption></figure>
+          </div>
+          <div id="refSignature" class="hint"></div>
+          <div class="table-wrap">
+            <table id="fractionTable">
+              <thead><tr>
+                <th>通路</th><th>核对长曝光</th><th>长曝光总能量</th><th>真实亮度占比</th>
+                <th>b 预测份额</th><th>A 访问率</th><th>B 访问率</th><th>A 能量估计 b·r</th><th>B 能量估计 b·r</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="energyAudit" class="audit-grid"></div>
+          <div class="hint">规则：亮度占比必须与“单独遮挡”的长曝光比，不能用整幅画均值替代——MLT 权重 b·f/fstar 使全图能量对任意受困链都恒等于 b，整幅均值无法暴露缺模式错误。</div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-mc">
+        <div class="panel">
+          <div class="panel-head">
+            <h2>均匀照明 vs 窄开口：等预算普通采样参照</h2>
+            <button id="btnUniformBench" class="btn primary">运行均匀照明对照自测</button>
+          </div>
+          <div class="ref-grid three">
+            <figure><canvas id="uniMlt" width="480" height="324"></canvas><figcaption>均匀场景 · MLT</figcaption></figure>
+            <figure><canvas id="uniMc" width="480" height="324"></canvas><figcaption>均匀场景 · 普通均匀 MC（等样本数）</figcaption></figure>
+            <figure><canvas id="uniRef" width="480" height="324"></canvas><figcaption>均匀场景 · 长高样本参照</figcaption></figure>
+          </div>
+          <div class="ref-grid two diff-grid">
+            <figure><canvas id="uniDiffMlt" width="480" height="324"></canvas><figcaption>MLT − 参照 有符号残差（蓝=低估，红=高估，按参照能量定标）</figcaption></figure>
+            <figure><canvas id="uniDiffMc" width="480" height="324"></canvas><figcaption>普通 MC − 参照 有符号残差（盐粒/稀疏噪声结构）</figcaption></figure>
+          </div>
+          <div id="uniMetrics" class="audit-grid"></div>
+          <div class="hint">窄开口下普通均匀 MC 绝大多数样本为 0（盐粒噪声）；MLT 链一旦进入通道会沿窄脊高效采样，但需要全局提议/独立初始化保证模式覆盖。噪声结构与覆盖率见诊断页。</div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-diag">
+        <div class="diag-grid">
+          <div class="panel">
+            <h2>提议支持域投影 <small>ey–py 截面；斜带为狭缝通道，方框为局部扰动支撑，探针点为 q 实测落点</small></h2>
+            <canvas id="supportCanvas" width="520" height="420"></canvas>
+            <div class="legend">
+              <span><i class="swatch" style="background:rgba(127,180,255,.35)"></i>A 通道</span>
+              <span><i class="swatch" style="background:rgba(255,217,168,.35)"></i>B 通道</span>
+              <span><i class="dot" style="background:#fff"></i>链当前状态</span>
+              <span><i class="dot" style="background:#57e389"></i>探针命中</span>
+              <span><i class="dot" style="background:#e01b24"></i>探针落零</span>
+            </div>
+          </div>
+          <div class="panel">
+            <h2>诊断结论与执行</h2>
+            <div class="seg" id="diagRunSeg">
+              <button data-drun="A" class="active">诊断 A</button>
+              <button data-drun="B">诊断 B</button>
+            </div>
+            <div id="diagCard"></div>
+            <div class="action-row">
+              <button id="actContinue" class="btn">继续累计</button>
+              <button id="actStage" class="btn">分阶段重新归一</button>
+              <button id="actRestart" class="btn warn">重启该链</button>
+              <button id="actRestartGlobal" class="btn primary">重启并给 B 全局提议</button>
+            </div>
+            <div class="table-wrap">
+              <table id="regionTable"><thead><tr>
+                <th>区域</th><th>状态</th><th>期望份额</th><th>访问率</th><th>探针支持率</th><th>访问数</th>
+              </tr></thead><tbody></tbody></table>
+            </div>
+          </div>
+          <div class="panel wide-diag">
+            <h2>各模式访问率时间轨迹 <small>最近 1200 个记录状态；颜色=模式</small></h2>
+            <canvas id="timelineCanvas" width="900" height="90"></canvas>
+            <div id="coverageStats" class="audit-grid"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabpane" id="tab-trace">
+        <div class="panel">
+          <h2>当前状态密度与 MH 提议台账</h2>
+          <div id="inspectorDetail" class="inspector-detail"></div>
+          <div class="table-wrap trace-wrap">
+            <table id="traceTable">
+              <thead><tr>
+                <th>#</th><th>链</th><th>提议</th><th>结果</th><th>模式</th>
+                <th>fstar(x)</th><th>fstar(y)</th><th>q(x→y)</th><th>q(y→x)</th><th>α</th><th>u</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div id="kernelLog" class="kernel-log"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 右栏：实时指标 ============ -->
+  <aside class="col right">
+    <div class="panel">
+      <h2>运行与接受率</h2>
+      <div id="statusPanel" class="status-panel"></div>
+    </div>
+    <div class="panel">
+      <h2>模式访问率</h2>
+      <div id="modePanel"></div>
+    </div>
+    <div class="panel">
+      <h2>归一化 b 来源追踪</h2>
+      <div id="bPanel" class="b-panel"></div>
+    </div>
+    <div class="panel">
+      <h2>账目核对（拒绝状态也沉积）</h2>
+      <div id="auditPanel" class="b-panel"></div>
+    </div>
+  </aside>
+</main>
+
+<footer class="footer">
+  <span>启动：<code>python3 -m http.server 8123</code> 后浏览器打开 <code>http://localhost:8123/</code>（也可直接双击 index.html）。</span>
+  <span>内核：src/kernel.js（Node 可测） · 界面：src/app.js 由内核 SCHEMA/状态驱动</span>
+</footer>
+
+<div id="kernelToast" class="kernel-toast" role="status" aria-live="polite"></div>
+
+<script src="src/kernel.js"></script>
+<script src="src/app.js"></script>
+</body>
+</html>
